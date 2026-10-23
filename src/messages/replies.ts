@@ -32,9 +32,9 @@ export type ReplyKey = keyof typeof REPLY_FIELDS;
 export type Replies = Record<ReplyKey, string>;
 export const DEFAULT_REPLIES = Object.fromEntries(Object.entries(REPLY_FIELDS).map(([key, value]) => [key, value.text])) as Replies;
 export const REPLY_GROUPS: Record<ReplyKey, string> = {
-    help: '积分帮助', openUsage: '开户', opened: '开户', balance: '余额',
-    history: '流水', historyItem: '流水', historyEmpty: '流水',
-    transferUsage: '转账', transferPreview: '转账', transferCompleted: '转账', privateOnly: '通用提示', error: '通用提示'
+    help: '/积分', openUsage: '/积分 开户', opened: '/积分 开户', balance: '/积分 余额',
+    history: '/积分 流水 [游标]', historyItem: '/积分 流水 [游标]', historyEmpty: '/积分 流水 [游标]',
+    transferUsage: '/积分 转账 <SID> <金额>', transferPreview: '/积分 转账 <SID> <金额>', transferCompleted: '/积分 转账 <SID> <金额>', privateOnly: '通用提示', error: '通用提示'
 };
 
 // 与编辑器共用检查逻辑，位置使用 UTF-16 下标，可直接定位文本框选区。

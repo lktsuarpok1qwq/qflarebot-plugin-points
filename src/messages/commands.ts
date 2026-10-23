@@ -4,8 +4,8 @@ import { ownBalance, openOwnAccount } from '../wallet/accounts.js';
 import { queries } from '../wallet/queries.js';
 import { createTransferIntent, executeTransferIntent } from '../wallet/intents.js';
 import { systemFailure } from '../wallet/errors.js';
-import { reply, escapeMarkdown } from './replies.js';
-import { replyMessage, replyFailure } from './reply-message.js';
+import { replyMessage, replyFailure, configuration } from './reply-message.js';
+import { replyPresentation } from './presentation.js';
 
 // 只复用固定语言和时区的格式化器；首次展示非空流水时才创建。
 let historyTimeFormatter: Intl.DateTimeFormat | undefined;
@@ -52,7 +52,7 @@ const transactionsCommand: CommandHandler = async ({ ctx, session, args }) => {
     }
 
     const result = await queries(ctx, true).getTransactions({
-        source: 'points.qq', userId: session.userId, limit: 10,
+        source: 'points.qq', userId: session.userId, limit: replyPresentation.historyLimit,
         ...(args[0] ? { cursor: args[0] } : {})
     });
 
@@ -60,15 +60,14 @@ const transactionsCommand: CommandHandler = async ({ ctx, session, args }) => {
         return replyFailure(ctx, result);
     }
 
-    const fragmentValues = (values: Record<string, string>) => Object.fromEntries(Object.entries(values).map(([name, value]) => [name, escapeMarkdown(value)]));
-    const lines = result.data.items.map(item => reply(ctx, 'historyItem', fragmentValues({
+    const records = result.data.items.map(item => ({
         time: formatHistoryTime(item.createdAtMs), type: item.type,
         available: formatAmount(item.availableDeltaMinor), reserved: formatAmount(item.reservedDeltaMinor),
         reason: item.reason ?? item.referenceId ?? item.transactionId, transactionId: item.transactionId,
         source: item.source, referenceId: item.referenceId ?? ''
-    })));
+    }));
 
-    return replyMessage(ctx, 'history', { userId: session.userId, month: result.data.month, items: lines.join('\n\n') || reply(ctx, 'historyEmpty') }, result.data.nextCursor ? { next: `积分 流水 ${result.data.nextCursor}` } : {}, ['items']);
+    return replyMessage(ctx, 'history', { userId: session.userId, month: result.data.month, items: replyPresentation.history(configuration(ctx), records) }, result.data.nextCursor ? { next: `积分 流水 ${result.data.nextCursor}` } : {}, ['items']);
 };
 const transferCommand: CommandHandler = async ({ ctx, session, args }) => {
     if (session.scene !== 'c2c') {

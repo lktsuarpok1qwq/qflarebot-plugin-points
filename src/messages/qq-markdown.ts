@@ -99,13 +99,32 @@ export function renderQQMarkdown(source: string, markers?: { start: string; end:
     const close = () => { html += '</li></' + stack.pop()!.tag + '>'; };
 
     let lineStart = 0;
+    const lines = source.split('\n'), following: number[] = [];
+    let next = lines.length;
 
-    for (const line of source.split('\n')) {
+    for (let index = lines.length - 1; index >= 0; index--) {
+        following[index] = next;
+
+        if (lines[index]!.trim()) { next = index; }
+    }
+
+    for (const [index, line] of lines.entries()) {
         const currentStart = lineStart;
         const content = (text: string) => inline(text, currentStart + line.length - text.length);
         lineStart += line.length + 1;
         const list = /^( *)([-*]|\d+\.)\s+(.*)$/.exec(line);
         const indent = /^ */.exec(line)![0].length;
+
+        if (!line.trim() && stack.length) {
+            const after = lines[following[index]!] ?? '';
+            const afterIndent = /^ */.exec(after)![0].length;
+            const afterList = /^( *)([-*]|\d+\.)\s+/.test(after) && !/^\s*(\*\s*){3,}$/.test(after);
+
+            if (after.trim() && (afterIndent > stack.at(-1)!.indent || afterList && afterIndent >= stack[0]!.indent)) {
+                html += '<div><br></div>';
+                continue;
+            }
+        }
 
         if (list && !/^\s*(\*\s*){3,}$/.test(line)) {
             const tag = /^\d/.test(list[2]!) ? 'ol' : 'ul';

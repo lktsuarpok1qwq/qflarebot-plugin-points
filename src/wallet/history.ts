@@ -18,17 +18,24 @@ interface HistoryCursor {
 const HISTORY_COLUMNS = `i.tx_id,i.bot_id,i.source,i.operation_id,i.type,i.reference_id,i.reverses_tx_id,i.compensates_tx_id,
     i.created_at_ms,i.date_bjt,i.month_bjt,i.commit_revision,i.reason,i.expected_entry_count,i.ledger_json`;
 
+export const HISTORY_SCAN_BUDGET = 128;
+
+interface ScanResult {
+    rows: Record<string, unknown>[];
+    after?: { time: number; tx: string };
+}
+
 async function personalSourceRows(ctx: PluginContext, scope: {
     user: string;
     source: string;
     month: string;
     revision: number;
     cursor: HistoryCursor | null;
-}, prefix: Record<string, unknown>[], limit: number): Promise<Record<string, unknown>[]> {
-    const selected = prefix.filter(row => row.source === scope.source);
+}, prefix: Record<string, unknown>[], limit: number): Promise<ScanResult> {
+    const selected = prefix.filter(row => row.source === scope.source && Number(row.commit_revision) <= scope.revision);
 
     if (prefix.length < limit || selected.length === limit) {
-        return selected;
+        return { rows: selected };
     }
 
     // 先限制来源候选数量，再按完整用户主键判断归属；不能先过滤用户再 LIMIT，
@@ -44,18 +51,26 @@ async function personalSourceRows(ctx: PluginContext, scope: {
     const matching = sourceRows.filter(row => row.user_matches === 1).map(({ user_matches, ...row }) => row);
 
     if (sourceRows.length < limit || matching.length === limit) {
-        return matching;
+        return { rows: matching };
     }
 
-    // 两边均未读尽时，从个人候选的末尾继续，避免重复扫描已读取的那一段。
+    // 先按个人主键限制候选，再在内存筛选来源与高水位；不能为凑满一页扫描整月。
     const last = prefix.at(-1)!;
-    const remaining = await ctx.db.all<Record<string, unknown>>(`SELECT ${HISTORY_COLUMNS}
+    const budget = HISTORY_SCAN_BUDGET - prefix.length;
+    const candidates = await ctx.db.all<Record<string, unknown>>(`SELECT ${HISTORY_COLUMNS}
         FROM {transaction_accounts} a CROSS JOIN {transactions} i ON i.tx_id=a.tx_id
-        WHERE a.bot_id=? AND a.user_id=? AND a.month_bjt=? AND i.source=? AND a.commit_revision<=?
+        WHERE a.bot_id=? AND a.user_id=? AND a.month_bjt=?
         AND (a.created_at_ms,a.tx_id)<(?,?) ORDER BY a.created_at_ms DESC,a.tx_id DESC LIMIT ?`,
-        ctx.botId, scope.user, scope.month, scope.source, scope.revision, last.created_at_ms, last.tx_id, limit - selected.length);
+        ctx.botId, scope.user, scope.month, last.created_at_ms, last.tx_id, budget + 1);
+    const scanned = candidates.slice(0, budget);
+    const rows = [...selected, ...scanned.filter(row => row.source === scope.source && Number(row.commit_revision) <= scope.revision)];
+    const tail = scanned.at(-1);
 
-    return [...selected, ...remaining];
+    return {
+        rows,
+        ...(rows.length < limit && candidates.length > budget && tail
+            ? { after: { time: tail.created_at_ms as number, tx: tail.tx_id as string } } : {})
+    };
 }
 
 export async function historyPage(ctx: PluginContext, input: {
@@ -100,15 +115,15 @@ export async function historyPage(ctx: PluginContext, input: {
     const result = await readReady(ctx, () => ctx.db.batch([
         statement('SELECT schema_version,format,init_state,ledger_revision FROM {wallet_state} WHERE bot_id=?', ctx.botId),
         statement(`SELECT ${HISTORY_COLUMNS} FROM ${from} WHERE ${scope} ${readSource ? 'AND i.source=?' : ''}
-            AND ${ordered}.commit_revision<=COALESCE(?,(SELECT ledger_revision FROM {wallet_state} WHERE bot_id=?))
+            ${user && source ? '' : `AND ${ordered}.commit_revision<=COALESCE(?,(SELECT ledger_revision FROM {wallet_state} WHERE bot_id=?))`}
             AND (${ordered}.created_at_ms,${ordered}.tx_id)<(?,?)
-            ORDER BY ${ordered}.created_at_ms DESC,${ordered}.tx_id DESC LIMIT ?`, ...params, cursor?.revision ?? null, ctx.botId, cursor?.time ?? Number.MAX_SAFE_INTEGER, cursor?.tx ?? '', pageSize + 1)
+            ORDER BY ${ordered}.created_at_ms DESC,${ordered}.tx_id DESC LIMIT ?`, ...params, ...user && source ? [] : [cursor?.revision ?? null, ctx.botId], cursor?.time ?? Number.MAX_SAFE_INTEGER, cursor?.tx ?? '', pageSize + 1)
     ]), value => value[0]!.results[0]);
     const revision = cursor?.revision ?? result[0]!.results[0]!.ledger_revision as number;
-    const candidates = user && source ? await personalSourceRows(ctx, {
+    const scan: ScanResult = user && source ? await personalSourceRows(ctx, {
         user, source, month: input.month, revision, cursor
-    }, result[1]!.results, pageSize + 1) : result[1]!.results;
-    const rows = candidates.slice(0, pageSize);
+    }, result[1]!.results, pageSize + 1) : { rows: result[1]!.results };
+    const rows = scan.rows.slice(0, pageSize);
     const items: Record<string, unknown>[] = rows.map(({ ledger_json, ...row }) => {
         const ledger = readLedger(ledger_json as string, row.expected_entry_count as number);
 
@@ -128,9 +143,10 @@ export async function historyPage(ctx: PluginContext, input: {
 
     return {
         month: input.month, items, pageTotals, highWaterRevision: revision, bodyComplete: items.every(item => item.bodyStatus === 'loaded'),
-        ...(candidates.length > pageSize && last ? {
+        ...(scan.after ? { scanLimited: true } : {}),
+        ...(scan.after || scan.rows.length > pageSize && last ? {
             nextCursor: encodeURIComponent(JSON.stringify({
-                bot: ctx.botId, month: input.month, user, source, revision, time: last.created_at_ms, tx: last.tx_id
+                bot: ctx.botId, month: input.month, user, source, revision, time: scan.after?.time ?? last!.created_at_ms, tx: scan.after?.tx ?? last!.tx_id
             }))
         } : {})
     };

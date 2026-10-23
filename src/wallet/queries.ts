@@ -5,7 +5,7 @@ import { balance } from './model.js';
 import { readReady } from './storage/schema.js';
 import { identifier, lookup, readReadyOperation, sourceId } from './ledger/operations.js';
 import { requireCondition, success, systemFailure } from './errors.js';
-import { placeholders, statement } from './storage/sql.js';
+import { placeholders } from './storage/sql.js';
 import { DATABASE_NOW_MS, beijingMonth } from './time.js';
 import { pick } from './input.js';
 import { LIMITS } from './limits.js';
@@ -128,21 +128,27 @@ export function queries(ctx: PluginContext, internal = false): Pick<PointsServic
                 requireCondition(Number.isInteger(limit) && limit >= 1 && limit <= LIMITS.pageSize, 'LIMIT_EXCEEDED');
                 const cursor = input.cursor ? decodeCursor(input.cursor) : null;
                 requireCondition(!cursor || (cursor.bot === ctx.botId && cursor.source === input.source && cursor.user === input.userId), 'INVALID_ARGUMENT');
-                const result = await readReady(ctx, () => ctx.db.batch([
-                    statement(`SELECT schema_version,format,init_state,${DATABASE_NOW_MS} AS now,ledger_revision FROM {wallet_state} WHERE bot_id=?`, ctx.botId),
-                    statement('SELECT s.*,EXISTS(SELECT 1 FROM {accounts} a WHERE a.bot_id=s.bot_id AND a.user_id=?) AS account_exists FROM {sources} s WHERE s.bot_id=? AND s.source=?', input.userId, ctx.botId, input.source),
-                    statement(`SELECT i.tx_id,i.source,i.operation_id,i.type,i.created_at_ms,i.reference_id,i.reverses_tx_id,i.compensates_tx_id,
-                        i.reason,a.available_delta_minor,a.reserved_delta_minor FROM {transaction_accounts} a
-                        CROSS JOIN {transactions} i ON i.tx_id=a.tx_id
-                        WHERE a.bot_id=? AND a.user_id=? AND a.month_bjt=strftime('%Y-%m','now','+8 hours')
-                        AND a.commit_revision<=COALESCE(?,(SELECT ledger_revision FROM {wallet_state} WHERE bot_id=?))
-                        AND (a.created_at_ms,a.tx_id)<(?,?) ORDER BY a.created_at_ms DESC,a.tx_id DESC LIMIT ?`, ctx.botId, input.userId, cursor?.revision ?? null, ctx.botId, cursor?.time ?? Number.MAX_SAFE_INTEGER, cursor?.tx ?? '', limit + 1)
-                ]), value => value[0]!.results[0]);
-                readable(result[1]!.results[0] as unknown as SourceRow | undefined, 'transactions');
-                requireCondition(result[1]!.results[0]!.account_exists === 1, 'ACCOUNT_NOT_FOUND');
-                const month = beijingMonth(result[0]!.results[0]!.now as number);
+                const metadata = await readReady(ctx, () => ctx.db.first<{
+                    source: string | null; enabled: number; read_permissions: string;
+                    account_user_id: string | null; now: number; ledger_revision: number;
+                }>(`SELECT m.schema_version,m.format,m.init_state,m.ledger_revision,${DATABASE_NOW_MS} AS now,
+                    s.source,s.enabled,s.read_permissions,a.user_id AS account_user_id
+                    FROM {wallet_state} m LEFT JOIN {sources} s ON s.bot_id=m.bot_id AND s.source=?
+                    LEFT JOIN {accounts} a ON a.bot_id=CASE WHEN s.enabled=1
+                        AND (json_extract(s.read_permissions,'$[0]')='transactions' OR json_extract(s.read_permissions,'$[1]')='transactions')
+                        THEN m.bot_id END AND a.user_id=? WHERE m.bot_id=?`, input.source, input.userId, ctx.botId), value => value);
+                readable(metadata?.source ? metadata : undefined, 'transactions');
+                requireCondition(metadata?.account_user_id, 'ACCOUNT_NOT_FOUND');
+                const month = beijingMonth(metadata.now);
                 requireCondition((input.month === undefined || input.month === month) && (!cursor || cursor.month === month), 'INVALID_ARGUMENT');
-                const rows = result[2]!.results;
+                const revision = cursor?.revision ?? metadata.ledger_revision;
+                // 权限与月份通过后才读流水；固定首读月份和高水位，跨月或并发提交不能混入新记录。
+                const rows = await ctx.db.all<Record<string, unknown>>(`SELECT i.tx_id,i.source,i.operation_id,i.type,i.created_at_ms,i.reference_id,i.reverses_tx_id,i.compensates_tx_id,
+                    i.reason,a.available_delta_minor,a.reserved_delta_minor FROM {transaction_accounts} a
+                    CROSS JOIN {transactions} i ON i.tx_id=a.tx_id
+                    WHERE a.bot_id=? AND a.user_id=? AND a.month_bjt=? AND a.commit_revision<=?
+                    AND (a.created_at_ms,a.tx_id)<(?,?) ORDER BY a.created_at_ms DESC,a.tx_id DESC LIMIT ?`,
+                    ctx.botId, input.userId, month, revision, cursor?.time ?? Number.MAX_SAFE_INTEGER, cursor?.tx ?? '', limit + 1);
                 const items = rows.slice(0, limit).map(summary);
                 const last = rows[limit - 1];
                 const data: TransactionPage = { month, items };
@@ -150,7 +156,7 @@ export function queries(ctx: PluginContext, internal = false): Pick<PointsServic
                 if (rows.length > limit && last) {
                     data.nextCursor = encodeURIComponent(JSON.stringify({
                         bot: ctx.botId, source: input.source, user: input.userId,
-                        month, revision: cursor?.revision ?? result[0]!.results[0]!.ledger_revision, time: last.created_at_ms, tx: last.tx_id
+                        month, revision, time: last.created_at_ms, tx: last.tx_id
                     }));
                 }
 

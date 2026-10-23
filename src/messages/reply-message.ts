@@ -3,7 +3,7 @@ import type { OutgoingMessage, PluginContext } from '@qqbot/sdk';
 import type { PointsFailure } from '../contracts.js';
 import { DEFAULT_CONFIGURATION } from './reply-config.js';
 import type { MessageKey, ReplyConfiguration } from './reply-config.js';
-import { reply, escapeMarkdown } from './replies.js';
+import { replyPresentation } from './presentation.js';
 
 export function configuration(ctx: Pick<PluginContext, 'config'>): ReplyConfiguration {
     // 入口先完整校验 D1 配置；直接调用处理器的测试上下文使用当前默认配置。
@@ -12,9 +12,12 @@ export function configuration(ctx: Pick<PluginContext, 'config'>): ReplyConfigur
 
 export function replyMessage(ctx: Pick<PluginContext, 'config'>, key: MessageKey, values: Record<string, string> = {}, dynamic: Partial<Record<'confirm' | 'cancel' | 'next', string>> = {}, rawValues: string[] = []): OutgoingMessage {
     const config = configuration(ctx);
-    const text = reply(ctx, key, Object.fromEntries(Object.entries(values).map(([name, value]) => [name, !rawValues.includes(name) ? escapeMarkdown(value) : value])));
+    const text = replyPresentation.text(config, key, values, rawValues);
+
+    if (new TextEncoder().encode(text).length > replyPresentation.maxBytes) { throw new Error('完整消息正文超过16000字节'); }
+
     const commands = { help: '积分', open: '积分 开户', balance: '积分 余额', history: '积分 流水', transfer: '积分 转账 ' };
-    const rows = config.buttons[key].map(row => row.flatMap(item => {
+    const rows = replyPresentation.buttons(config, key, dynamic).map(row => row.flatMap(item => {
         if (item.action === 'confirm' || item.action === 'cancel' || item.action === 'next') {
             const data = dynamic[item.action];
 

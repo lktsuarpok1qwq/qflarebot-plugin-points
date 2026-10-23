@@ -1,5 +1,6 @@
 import { DEFAULT_REPLIES, REPLY_FIELDS, templateError } from './replies.js';
 import type { Replies, ReplyKey } from './replies.js';
+import { replyPresentation } from './presentation.js';
 
 export const MESSAGE_KEYS = ['help', 'privateOnly', 'openUsage', 'opened', 'balance', 'history', 'transferUsage', 'transferPreview', 'transferCompleted', 'error'] as const;
 export type MessageKey = typeof MESSAGE_KEYS[number];
@@ -27,6 +28,7 @@ export interface ReplyButton {
 export interface ReplyConfiguration {
     replies: Replies;
     buttons: Record<MessageKey, ReplyButton[][]>;
+    historySeparator?: string;
 }
 export const DEFAULT_CONFIGURATION: ReplyConfiguration = {
     replies: DEFAULT_REPLIES,
@@ -36,7 +38,7 @@ export const DEFAULT_CONFIGURATION: ReplyConfiguration = {
 };
 export interface ConfigurationError {
     field: ReplyKey;
-    target: 'text' | 'buttons';
+    target: 'text' | 'buttons' | 'historySeparator';
     message: string;
     row?: number;
     item?: number;
@@ -51,9 +53,15 @@ export function configurationError(value: unknown, selected?: ReplyKey): Configu
     const exact = (v: unknown, keys: readonly string[]) => object(v) && Object.keys(v).length === keys.length && keys.every(key => Object.hasOwn(v, key));
     const problem = (field: ReplyKey, target: ConfigurationError['target'], message: string): ConfigurationError => ({ field, target, message, start: 0, end: 0 });
 
-    if (!exact(value, ['replies', 'buttons'])) { return problem('help', 'text', '模板配置结构不符合要求'); }
+    if (!exact(value, object(value) && Object.hasOwn(value, 'historySeparator') ? ['replies', 'buttons', 'historySeparator'] : ['replies', 'buttons'])) { return problem('help', 'text', '模板配置结构不符合要求'); }
 
     const config = value as unknown as ReplyConfiguration;
+
+    if (Object.hasOwn(config, 'historySeparator') && (typeof config.historySeparator !== 'string'
+        || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(config.historySeparator)
+        || new TextEncoder().encode(config.historySeparator).length > 4096)) {
+        return problem('history', 'historySeparator', '项目间隔最多4096字节，不接受不支持的控制字符；留空表示直接连接');
+    }
 
     if (!exact(config.replies, Object.keys(REPLY_FIELDS)) || !exact(config.buttons, MESSAGE_KEYS)) {
         return problem('help', 'text', '请提交全部正文和按钮配置');
@@ -118,7 +126,9 @@ export function configurationError(value: unknown, selected?: ReplyKey): Configu
         }
     }
 
-    return null;
+    const expanded = replyPresentation.budget(config, selected);
+
+    return expanded ? problem(expanded.field, 'text', expanded.message) : null;
 }
 
 export function safeHttpUrl(value: unknown): value is string {

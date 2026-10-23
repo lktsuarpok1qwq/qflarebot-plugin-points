@@ -128,6 +128,7 @@ async function loadHistory(next = false) {
         }
 
         historyCursor = data.nextCursor;
+        $('history-next').textContent = data.scanLimited ? '继续查询' : '下一页';
         historyLoaded = true;
         $('history-scope').textContent = filters.month + (filters.user ? ' · 账户 ' + filters.user : '') + (filters.source ? ' · 来源 ' + filters.source : '') + '；' + (data.bodyComplete ? '本页正文已加载' : '本页有缺失或损坏的正文，不能视为完整结果');
 
@@ -136,6 +137,8 @@ async function loadHistory(next = false) {
         } else {
             $('history-scope').textContent += '\n' + (data.bodyComplete ? '本页所列交易合计：发行 ' : '仅正文完整交易的小计：发行 ') + money(data.pageTotals.minted) + '，销毁 ' + money(data.pageTotals.burned) + '，转移 ' + money(data.pageTotals.transferred) + '，冲正发行 ' + money(data.pageTotals.reversalMint) + '，冲正销毁 ' + money(data.pageTotals.reversalBurn) + '（非全月总额）';
         }
+
+        if (data.scanLimited) { $('history-scope').textContent += '\n已查询一批记录，可点击“继续查询”查找更早记录'; }
 
         const columns = [['时间', r => date(r.created_at_ms)], ['类型', r => transactionType(r.type)]];
 
@@ -159,6 +162,13 @@ async function loadHistory(next = false) {
             syncReason();
             showJsonDetail('交易详情', { 交易: r.tx_id, 分录: r.entries, 冲正原交易: r.reverses_tx_id, 补偿原交易: r.compensates_tx_id }, $('original'), 'transaction');
         }));
+
+        if (data.scanLimited && !data.items.length) {
+            const hint = document.createElement('p');
+            hint.className = 'hint';
+            hint.textContent = '本批未找到匹配记录，可继续查询';
+            $('history-result').replaceChildren(hint);
+        }
     } catch (error) {
         if (request === historyRequest && current()) {
             $('history-scope').textContent = '查询失败，请重试；未取得本页流水';

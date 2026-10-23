@@ -155,7 +155,7 @@ async function action(ctx: PluginContext, body: Record<string, unknown>) {
     }
 
     if (name === 'reply-templates') {
-        pick(body, ['action', 'expectedRevision', 'replies', 'buttons']);
+        pick(body, ['action', 'expectedRevision', 'replies', 'buttons', 'historySeparator']);
 
         return saveReplySettings(ctx, input);
     }

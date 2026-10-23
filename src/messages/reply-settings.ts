@@ -21,6 +21,7 @@ export function validateConfiguration(value: unknown): ReplyConfiguration {
     const config = value as ReplyConfiguration;
 
     return {
+        ...(config.historySeparator !== undefined ? { historySeparator: config.historySeparator } : {}),
         replies: Object.fromEntries(Object.keys(REPLY_FIELDS).map(key => [key, config.replies[key as keyof typeof config.replies]])) as ReplyConfiguration['replies'],
         buttons: Object.fromEntries(MESSAGE_KEYS.map(key => [key, config.buttons[key].map(row => row.map(item => ({
             action: item.action, label: item.label, ...(item.data !== undefined ? { data: item.data } : {}), ...(item.enter !== undefined ? { enter: item.enter } : {})
@@ -59,18 +60,19 @@ export async function loadReplySettings(ctx: Pick<PluginContext, 'db' | 'botId'>
 
 export async function saveReplySettings(ctx: Pick<PluginContext, 'db' | 'botId'>, input: unknown) {
     try {
-        const value = pick(input, ['expectedRevision', 'replies', 'buttons']);
+        const value = pick(input, ['expectedRevision', 'replies', 'buttons', 'historySeparator']);
         requireCondition(Number.isSafeInteger(value.expectedRevision) && (value.expectedRevision as number) >= 0
             && (value.expectedRevision as number) < Number.MAX_SAFE_INTEGER, 'INVALID_ARGUMENT');
         const { expectedRevision, ...payload } = value;
         const config = validateConfiguration(payload);
         const serialized = JSON.stringify(config);
         const current = await loadReplySettings(ctx);
+        const { revision: currentRevision, ...currentConfiguration } = current;
 
         // 相同配置不写库，也可确认已提交但响应丢失的保存结果。
-        if (serialized === JSON.stringify({ replies: current.replies, buttons: current.buttons })) { return { ok: true as const, data: current }; }
+        if (serialized === JSON.stringify(currentConfiguration)) { return { ok: true as const, data: current }; }
 
-        requireCondition(current.revision === value.expectedRevision, 'POLICY_VERSION_CONFLICT');
+        requireCondition(currentRevision === value.expectedRevision, 'POLICY_VERSION_CONFLICT');
         const write = current.revision === 0
             ? statement(`INSERT INTO {reply_settings}(bot_id,format,revision,replies_json) VALUES(?,?,1,?)
                 ON CONFLICT(bot_id) DO NOTHING`, ctx.botId, REPLY_FORMAT, serialized)
@@ -81,7 +83,8 @@ export async function saveReplySettings(ctx: Pick<PluginContext, 'db' | 'botId'>
         if (result[0]!.changes === 1) { return { ok: true as const, data: { revision: current.revision + 1, ...config } }; }
 
         const winner = await loadReplySettings(ctx);
-        requireCondition(JSON.stringify({ replies: winner.replies, buttons: winner.buttons }) === serialized, 'POLICY_VERSION_CONFLICT');
+        const { revision: winnerRevision, ...winnerConfiguration } = winner;
+        requireCondition(winnerRevision > 0 && JSON.stringify(winnerConfiguration) === serialized, 'POLICY_VERSION_CONFLICT');
 
         return { ok: true as const, data: winner };
     } catch (error) {

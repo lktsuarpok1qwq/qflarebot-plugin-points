@@ -142,6 +142,8 @@ export interface PointsService {
         userId: AccountId;
         amountMinor: Minor;
     }): Promise<Result<OperationReceipt>>;
+    // retryable=false 的余额不足、账户不存在/暂停、来源不存在/停用均已保存永久拒绝。
+    // 此保证仅适用于 burn；参数、权限歧义、编号冲突和未知结果仍须按原编号核验。
     burn(input: OperationContext & {
         userId: AccountId;
         amountMinor: Minor;

@@ -5,18 +5,19 @@ import { BUTTON_EDITOR_SCRIPT } from './buttons.js';
 import { TEXT_EDITOR_SCRIPT } from './text.js';
 import { PREVIEW_EDITOR_SCRIPT } from './preview.js';
 import { IMAGE_EDITOR_SCRIPT } from './images.js';
+import { createReplyPresentation } from '../../messages/presentation.js';
 
 export const REPLY_EDITOR_HTML = String.raw`<section id="replies" role="tabpanel" class="qb-card" hidden>
 <div class="reply-header"><h2>消息模板</h2><div class="actions"><span id="reply-status" class="hint" role="status" aria-live="polite">尚未加载</span><button id="reply-load" class="qb-btn">加载模板</button></div></div>
 <p class="hint">使用 QQ Markdown 编辑正文，普通文字直接填写。预览使用示例数据，不发送消息；点击保存后生效。</p>
-<div id="reply-controls" hidden><div class="grid"><label>模板分类<select id="reply-group" class="qb-input"></select></label><label id="reply-key-field">编辑分支<select id="reply-key" class="qb-input"></select></label></div>
+<div id="reply-controls" hidden><div class="grid"><label>编辑命令<select id="reply-group" class="qb-input"></select></label><label id="reply-key-field">编辑消息<select id="reply-key" class="qb-input"></select></label></div>
 <div id="reply-workspace" class="reply-workspace">
-<div class="reply-source-tools"><h3><label id="reply-body-label" for="reply-body">模板正文</label></h3><p id="reply-uses" class="hint"></p><div id="reply-toolbar" class="actions" role="group" aria-label="Markdown 格式"></div><p id="reply-error" class="error" role="status" aria-live="polite" hidden></p></div>
+<div class="reply-source-tools"><h3><label id="reply-body-label" for="reply-body">模板正文</label></h3><p id="reply-uses" class="hint"></p><div id="reply-related" class="actions"></div><div id="reply-toolbar" class="actions" role="group" aria-label="Markdown 格式"></div><p id="reply-error" class="error" role="status" aria-live="polite" hidden></p></div>
 <div class="reply-preview-tools"><h3 id="reply-preview-title">即时预览</h3><div class="actions" role="group" aria-label="预览模式"><button id="reply-sample" class="qb-btn" aria-pressed="true">情景预览</button><button id="reply-layout" class="qb-btn" aria-pressed="false">排版预览</button></div>
-<label id="reply-scenario-field" hidden>情景<select id="reply-scenario" class="qb-input"></select></label></div>
+<label id="reply-scenario-field" hidden>消息情景<select id="reply-scenario" class="qb-input"></select></label></div>
 <textarea id="reply-body" class="qb-input qb-mono" rows="10" spellcheck="false" aria-describedby="reply-uses reply-hint reply-error"></textarea>
 <div id="reply-preview" class="reply-preview"><div class="reply-preview-scroll"><div id="reply-preview-text"></div><div id="reply-preview-buttons"></div></div></div>
-<div class="reply-assistance"><p id="reply-hint" class="hint"></p><h3>当前位置可用变量</h3><div id="reply-variables" class="actions" role="group" aria-label="插入变量" hidden></div></div></div>
+<div class="reply-assistance"><div id="reply-separator-field" hidden><label for="reply-separator">流水项目间隔</label><textarea id="reply-separator" class="qb-input qb-mono" rows="2" aria-describedby="reply-separator-hint reply-separator-error"></textarea><p id="reply-separator-hint" class="hint">支持空行和 Markdown 分隔线；留空表示直接连接所有项目。与完整流水列表及单笔片段共用</p><p id="reply-separator-error" class="error" role="status" hidden></p></div><p id="reply-hint" class="hint"></p><h3>当前位置可用变量</h3><div id="reply-variables" class="actions" role="group" aria-label="插入变量" hidden></div></div></div>
 <p id="reply-preview-notice" class="hint" role="status"></p>
 <p class="hint">预览按 QQ 文档格式近似显示，实际效果以 QQ 为准。支持标题、文字样式、链接、图片、列表、引用和分割线；不执行 HTML。</p>
 <section id="reply-buttons-section"><h3>消息按钮</h3><p class="hint">最多 5 行、每行 5 个按钮，文字最多 10 字，按固定文字显示，不替换模板变量。确认、取消和下一页参数由程序生成；下一页仅在有后续流水时显示。转账入口只填入命令，由本人补充收款人和金额。</p><div id="reply-buttons-editor"></div></section>
@@ -29,6 +30,7 @@ export const REPLY_EDITOR_SCRIPT = [
     'const templateError=' + templateError.toString() + ';',
     'const renderTemplate=' + renderTemplate.toString() + ';',
     'const escapeMarkdown=' + escapeMarkdown.toString() + ';',
+    'const createReplyPresentation=' + createReplyPresentation.toString() + ';const replyPresentation=createReplyPresentation(renderTemplate,escapeMarkdown,REPLY_FIELDS);',
     'const safeHttpUrl=' + safeHttpUrl.toString() + ';',
     'const configurationError=' + configurationError.toString() + ';',
     'const renderQQMarkdown=' + renderQQMarkdown.toString() + ';',
@@ -40,10 +42,11 @@ export const REPLY_EDITOR_SCRIPT = [
 function createReplyEditor() {
     const keys = Object.keys(REPLY_FIELDS), groups = [...new Set(Object.values(replyGroups))];
     let baseline, drafts, revision, key = keys[0], mode = 'sample', busy = false, rendered = false;
-    const positions = new Map();
+    const positions = new Map(), branchesByGroup = new Map();
+    const positionKey = () => replyGroups[key] + ':' + key;
     const clone = value => structuredClone(value);
     const applySettings = data => {
-        const config = { replies: data?.replies, buttons: data?.buttons };
+        const config = { replies: data?.replies, buttons: data?.buttons, ...(data?.historySeparator !== undefined ? { historySeparator: data.historySeparator } : {}) };
 
         if (!Number.isSafeInteger(data?.revision) || data.revision < 0 || configurationError(config)) {
             throw Error('模板响应不符合要求，草稿已保留，请重新加载或原样重试');
@@ -101,21 +104,8 @@ function createReplyEditor() {
     }).observe($('reply-body'));
 
     function refreshScenarios() {
-        const used = new Set([...drafts.replies[key].matchAll(/\{\{([^{}]*)\}\}/g)].map(match => match[1]));
-        let choices = [['normal', '示例']];
-
-        if (key === 'balance' && used.has('status')) { choices = [['normal', '正常账户'], ['paused', '暂停支出']]; }
-
-        if (key === 'history') {
-            const pagination = drafts.buttons.history.some(row => row.some(item => item.action === 'next'));
-            choices = pagination ? [['normal', '有后续页'], ['last', '末页']] : [['normal', '有流水']];
-
-            if (used.has('items')) { choices.push(['empty', '暂无流水']); }
-        }
-
-        if (key === 'transferPreview' && (used.has('fee') || used.has('total'))) { choices = [['normal', '免费转账'], ['fee', '含手续费']]; }
-
-        const select = $('reply-scenario'), previous = select.value || positions.get(key)?.scenario;
+        const choices = replyPresentation.scenarios(drafts, key);
+        const select = $('reply-scenario'), previous = select.value || positions.get(positionKey())?.scenario;
         const current = [...select.options].map(item => [item.value, item.textContent]);
 
         if (JSON.stringify(current) !== JSON.stringify(choices)) {
@@ -129,12 +119,17 @@ function createReplyEditor() {
 
     function preview() {
         refreshScenarios();
-        const error = configurationError(drafts, key), field = REPLY_FIELDS[key], current = error?.field === key ? error : null;
+        const error = configurationError(drafts, key), field = REPLY_FIELDS[key];
+        const current = error && (error.field === key || error.field === REPLY_FRAGMENTS[key]?.message) ? error : null;
         $('reply-body').setAttribute('aria-invalid', String(current?.target === 'text'));
         const before = current ? drafts.replies[key].slice(0, current.start).split('\n') : [];
         $('reply-error').textContent = current ? current.message + (current.target === 'text' ? '（第 ' + before.length + ' 行，第 ' + (before.at(-1).length + 1) + ' 列）' : '') : '';
         $('reply-error').hidden = !current || current.target !== 'text';
         buttonEditor.validate(current?.target === 'buttons' ? current : null);
+        const separatorError = error?.target === 'historySeparator' ? error.message : '';
+        $('reply-separator').setAttribute('aria-invalid', String(!!separatorError));
+        $('reply-separator-error').textContent = separatorError;
+        $('reply-separator-error').hidden = !separatorError;
         paintReplyPreview(drafts, key, mode, $('reply-scenario').value);
         $('reply-sample').setAttribute('aria-pressed', String(mode === 'sample'));
         $('reply-layout').setAttribute('aria-pressed', String(mode === 'layout'));
@@ -146,8 +141,8 @@ function createReplyEditor() {
     function rememberPosition() {
         if (!rendered) { return; }
 
-        const body = $('reply-body'), previous = positions.get(key);
-        positions.set(key, {
+        const body = $('reply-body'), previous = positions.get(positionKey());
+        positions.set(positionKey(), {
             start: body.selectionStart, end: body.selectionEnd, direction: body.selectionDirection,
             scrollTop: body.getClientRects().length ? body.scrollTop : previous?.scrollTop || 0, scenario: $('reply-scenario').value
         });
@@ -156,6 +151,7 @@ function createReplyEditor() {
     function edit(name) {
         rememberPosition();
         key = name;
+        branchesByGroup.set(replyGroups[key], key);
         $('reply-group').value = replyGroups[key];
         $('reply-key').replaceChildren();
         const branches = keys.filter(name => replyGroups[name] === replyGroups[key]);
@@ -166,6 +162,23 @@ function createReplyEditor() {
         $('reply-body').value = drafts.replies[key];
         const fragment = REPLY_FRAGMENTS[key];
         $('reply-uses').textContent = fragment ? '共享片段 · 用于“' + REPLY_FIELDS[fragment.message].title + '”，保存后所有引用同步生效' : '用于“' + REPLY_FIELDS[key].title + '”消息';
+        $('reply-related').replaceChildren();
+        const related = fragment ? [fragment.message] : key === 'history' ? Object.keys(REPLY_FRAGMENTS) : [];
+
+        for (const target of related) {
+            const button = document.createElement('button');
+            button.className = 'qb-btn';
+            button.textContent = '编辑' + (target === 'history' ? '完整流水列表' : REPLY_FIELDS[target].title);
+            button.onclick = () => {
+                edit(target);
+                $('reply-body').focus();
+            };
+            $('reply-related').append(button);
+        }
+
+        $('reply-related').hidden = !related.length;
+        $('reply-separator-field').hidden = !['history', 'historyItem'].includes(key);
+        $('reply-separator').value = drafts.historySeparator ?? replyPresentation.defaultSeparator;
         $('reply-scenario').replaceChildren();
         $('reply-buttons-section').hidden = !MESSAGE_KEYS.includes(key);
         $('reply-variables').replaceChildren();
@@ -187,7 +200,7 @@ function createReplyEditor() {
                 const details = document.createElement('details'), summary = document.createElement('summary'), content = document.createElement('p');
                 details.className = 'reply-variable-composition hint';
                 summary.textContent = '查看组成';
-                content.textContent = '有流水时使用“单笔流水”草稿并以空行连接，无流水时使用“暂无流水”草稿。组成仅供参考，不代表这些字段能直接用于流水列表正文；可用变量以上方按钮为准。';
+                content.textContent = '有流水时使用“单笔流水”草稿并按项目间隔连接，无流水时使用“暂无流水”草稿。组成仅供参考，不代表这些字段能直接用于流水列表正文；可用变量以上方按钮为准。';
                 const fields = document.createElement('dl');
 
                 for (const child of REPLY_FIELDS.historyItem.variables) {
@@ -208,7 +221,7 @@ function createReplyEditor() {
         buttonEditor.draw();
         preview();
         rendered = true;
-        const position = positions.get(key), body = $('reply-body');
+        const position = positions.get(positionKey()), body = $('reply-body');
 
         if (position) {
             body.setSelectionRange(Math.min(position.start, body.value.length), Math.min(position.end, body.value.length), position.direction);
@@ -244,10 +257,14 @@ function createReplyEditor() {
     });
     $('reply-body').addEventListener('select', rememberPosition);
     $('reply-body').addEventListener('scroll', rememberPosition);
-    $('reply-group').onchange = () => edit(keys.find(name => replyGroups[name] === $('reply-group').value));
+    $('reply-group').onchange = () => edit(branchesByGroup.get($('reply-group').value) || keys.find(name => replyGroups[name] === $('reply-group').value));
     $('reply-key').onchange = () => edit($('reply-key').value);
     $('reply-body').oninput = () => {
         drafts.replies[key] = $('reply-body').value;
+        preview();
+    };
+    $('reply-separator').oninput = () => {
+        drafts.historySeparator = $('reply-separator').value;
         preview();
     };
     $('reply-scenario').onchange = preview;
@@ -261,13 +278,15 @@ function createReplyEditor() {
     };
     $('reply-default').onclick = () => run(async () => {
         const current = key, view = viewVersion, fragment = REPLY_FRAGMENTS[key];
-        const impact = fragment ? '；影响“' + REPLY_FIELDS[fragment.message].title + '”的全部引用' : '；包含本分支的消息按钮';
+        const impact = (fragment ? '；影响“' + REPLY_FIELDS[fragment.message].title + '”的全部引用' : '；包含本分支的消息按钮') + (['history', 'historyItem'].includes(key) ? '及共用的流水项目间隔' : '');
 
         if (!await confirm('恢复“' + REPLY_FIELDS[key].title + '”的默认草稿' + impact + '，保存后生效', { title: '确认恢复当前默认', accept: '恢复当前默认' })) { return; }
 
         if (view !== viewVersion || current !== key) { return; }
 
         drafts.replies[key] = DEFAULT_CONFIGURATION.replies[key];
+
+        if (['history', 'historyItem'].includes(key)) { delete drafts.historySeparator; }
 
         if (MESSAGE_KEYS.includes(key)) {
             drafts.buttons[key] = clone(DEFAULT_CONFIGURATION.buttons[key]);
@@ -293,7 +312,7 @@ function createReplyEditor() {
 
         if (error) {
             edit(error.field);
-            const field = error.target === 'text' ? $('reply-body') : buttonEditor.validate(error);
+            const field = error.target === 'text' ? $('reply-body') : error.target === 'historySeparator' ? $('reply-separator') : buttonEditor.validate(error);
 
             if (field) {
                 field.focus();

@@ -99,7 +99,7 @@ async function completePending(submitted, outcome, view = viewVersion, receipt, 
     pendingAccounts = undefined;
     pendingReasonRevision = undefined;
 
-    if (val('reason') === submitted.reason && (inputRevisions.get($('reason')) || 0) === reasonRevision) {
+    if (outcome === 'committed' && val('reason') === submitted.reason && (inputRevisions.get($('reason')) || 0) === reasonRevision) {
         $('reason').value = '';
         $('reason').style.height = 'auto';
         clearFieldError($('reason'));

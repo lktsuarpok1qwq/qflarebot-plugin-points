@@ -84,6 +84,10 @@ function checkedState(kind, params, data) {
                     && (!params.source || row.source === params.source)) && data.bodyComplete === data.items.every(row => row.bodyStatus === 'loaded')
                 && responseObject(data.pageTotals) && ['minted', 'burned', 'transferred', 'reversalMint', 'reversalBurn'].every(name => typeof data.pageTotals[name] === 'string' && /^\d+$/.test(data.pageTotals[name]));
 
+            if (data.scanLimited !== undefined) {
+                valid = valid && data.scanLimited === true && kind === 'history' && !!params.user && !!params.source && !!data.nextCursor;
+            }
+
             if (kind === 'history-export') { valid = valid && data.format === 'points.monthly-ledger/v1' && responseId(data.botId); }
 
             break;

@@ -1,0 +1,18 @@
+{
+    "name": "qflarebot-plugin-points",
+    "version": "1.0.0",
+    "description": "通用积分钱包、原子账本与预留结算",
+    "type": "module",
+    "keywords": [
+        "qflarebot-plugin"
+    ],
+    "exports": {
+        ".": {
+            "types": "./src/contracts.ts"
+        }
+    },
+    "scripts": {
+        "build": "qqbot-plugin build --cwd ."
+    },
+    "packageManager": "pnpm@10.34.5"
+}

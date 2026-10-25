@@ -1,0 +1,94 @@
+{
+  "name": "points",
+  "version": "1.0.0",
+  "apiVersion": 4,
+  "permissions": [
+    "db",
+    "admin"
+  ],
+  "depends": {},
+  "conflicts": [],
+  "commands": [
+    {
+      "name": "积分",
+      "description": "积分使用说明",
+      "scenes": [
+        "group",
+        "c2c"
+      ]
+    },
+    {
+      "name": "积分 开户",
+      "description": "开通本人零余额账户",
+      "scenes": [
+        "group",
+        "c2c"
+      ]
+    },
+    {
+      "name": "积分 余额",
+      "description": "查看本人余额",
+      "scenes": [
+        "group",
+        "c2c"
+      ]
+    },
+    {
+      "name": "积分 流水",
+      "description": "查看本月流水",
+      "scenes": [
+        "group",
+        "c2c"
+      ]
+    },
+    {
+      "name": "积分 转账",
+      "description": "向已有账户转账",
+      "scenes": [
+        "group",
+        "c2c"
+      ]
+    }
+  ],
+  "regex": [],
+  "events": [],
+  "buttons": [],
+  "cron": [
+    {
+      "name": "points-expiry",
+      "cron": "* * * * *"
+    }
+  ],
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/ui/*",
+      "auth": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/state",
+      "auth": "admin"
+    },
+    {
+      "method": "POST",
+      "path": "/api/action",
+      "auth": "admin"
+    }
+  ],
+  "hasMiddleware": false,
+  "services": [
+    "points.wallet"
+  ],
+  "durableObjects": [],
+  "displayName": "通用积分",
+  "description": "通用积分钱包、原子账本与预留结算",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  },
+  "ui": {
+    "path": "/ui/",
+    "title": "积分管理"
+  }
+}
